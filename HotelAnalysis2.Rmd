@@ -1,0 +1,237 @@
+---
+title: "ChrisHotelAnalysis"
+author: "Chris Hill"
+date: "2026-09-11--2026-09-13"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+
+```{r, fig.width=14, fig.height=6}
+
+
+
+
+
+
+
+
+
+
+#Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# Cleaning data and adding columns for advance time and cancellation in words
+library(tidyverse)
+library(readr)
+df <- read_csv("Downloads/nc_hotel_group.csv")
+df <- df[df$num_adults != 0 | df$num_children != 0, ]
+df <- df[df$weekend_stays != 0 | df$week_stays != 0, ]
+df$cancellation_status <- factor(
+    df$canceled,
+    levels = c(0, 1),
+    labels = c("Not Canceled", "Canceled")
+)
+df <- df %>%
+    mutate(
+        advance_bucket = cut(
+            advance_time,
+            breaks = c(-Inf, 7, 30, 90, 180, 365, Inf),
+            labels = c(
+                "0–7 days",
+                "8–30 days",
+                "31–90 days",
+                "91–180 days",
+                "181–365 days",
+                "365+ days"
+            )
+        )
+    )
+
+# bar graph of proportion of cancellations based on channel
+ggplot(df, aes(x = booking_channel, fill = cancellation_status)) +
+  geom_bar(position = "fill") +
+  facet_wrap(~ property) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    y = "Cancellation Proportion",
+    x = "Booking Channel",
+    title = "Proportion of Cancellation vs Booking Channel",
+    fill = "Booking Status"
+  ) +
+  theme_minimal()
+  
+  
+# cleaned scatter plot of cancellation rate vs advance time
+Q1 <- quantile(df$advance_time, 0.25, na.rm = TRUE)
+ Q3 <- quantile(df$advance_time, 0.75, na.rm = TRUE)
+ IQR_value <- Q3 - Q1
+ 
+df_filtered <- df %>%
+     filter(
+         advance_time >= Q1 - 1.5 * IQR_value,
+         advance_time <= Q3 + 1.5 * IQR_value
+     )
+ cancel_rate_by_advance <- df_filtered %>%
+     group_by(advance_time) %>%
+     summarise(
+         cancel_rate = mean(canceled, na.rm = TRUE)
+     )
+ 
+ggplot(cancel_rate_by_advance, 
+        aes(x = advance_time, y = cancel_rate)) +
+     geom_point(alpha = 0.4) +
+     geom_smooth(method = "loess", se = TRUE) +
+     scale_y_continuous(labels = scales::percent) +
+     labs(
+         title = "Cancellation Rate vs. Advance Time",
+         x = "Advance Time (days)",
+         y = "Cancellation Rate"
+     )
+
+
+# bar graph of volume of cancellations based on channels
+ggplot(df,
+       aes(x = booking_channel, fill = cancellation_status)) +
+  geom_bar() +
+  facet_wrap(~ property) +
+  labs(
+    title = "Booking Volume and Cancellations by Booking Channel",
+    x = "Booking Channel",
+    y = "Number of Bookings",
+    fill = "Booking Status"
+  ) +
+  theme_minimal()
+  
+# cancellation proportion based on advance time
+
+ggplot(df, aes(x = advance_bucket, fill = cancellation_status)) +
+    geom_bar(position = "fill") +
+    facet_wrap(~ property) +
+    scale_y_continuous(labels = scales::percent) +
+    labs(
+        y = "Cancellation Proportion",
+        x = "Advance Time",
+        title = "Cancellation Proportion based on Advance Time",
+        fill = "Booking Status"
+    )
+  #create canellation rate
+ cancel_rate_by_date <- df %>%
+     mutate(
+         arrival_date = as.Date(
+             paste("2000", arrival_month, arrival_day_of_month),
+             format = "%Y %B %d"
+         )
+     ) %>%
+     group_by(property, arrival_date) %>%
+     summarise(
+         cancel_rate = mean(canceled, na.rm = TRUE),
+         .groups = "drop"
+     )
+
+#cancellation rate by arrival date
+ggplot(cancel_rate_by_date,
+        aes(x = arrival_date, y = cancel_rate, fill = property)) +
+     geom_col() +
+     facet_wrap(~ property) +
+     scale_y_continuous(labels = scales::percent) +
+     scale_x_date(date_labels = "%b %d") +
+     labs(
+         title = "Cancellation Rate by Arrival Date",
+         x = "Arrival Date",
+         y = "Cancellation Rate"
+     ) +
+     theme_minimal()
+
+# total lost revenue
+revenue_lost_by_property <- df %>%
+  filter(canceled == 1) %>%
+  mutate(
+    lost_revenue = (weekend_stays + week_stays) * average_daily_rate
+  ) %>%
+  group_by(property) %>%
+  summarise(
+    total_revenue_lost = sum(lost_revenue, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+# total revenue and total potential
+
+revenue_summary <- df %>%
+     mutate(
+         revenue = (weekend_stays + week_stays) * average_daily_rate
+     ) %>%
+     group_by(property) %>%
+     summarise(
+         total_revenue_earned = sum(revenue[canceled == 0], na.rm = TRUE),
+         total_potential_revenue = sum(revenue, na.rm = TRUE),
+         .groups = "drop"
+     )
+ 
+
+# Calculating cancellation_rate
+cancellation_rate <- df %>%
+     group_by(property) %>%
+     summarise(
+         total_bookings = n(),
+         canceled_bookings = sum(canceled, na.rm = TRUE),
+         cancellation_rate = mean(canceled, na.rm = TRUE),
+         .groups = "drop"
+     )
+
+# average daily rate at each property
+average_canceled_rate <- df %>%
+  filter(canceled == 1) %>%
+  group_by(property) %>%
+  summarise(
+    average_daily_rate = scales::dollar(
+      mean(average_daily_rate, na.rm = TRUE)
+    ),
+    .groups = "drop"
+  )
+#Revenue gained from deposits of people that cancelled - assuming that 10% won't even book
+potential_deposit_revenue <- df %>%
+  filter(
+    canceled == 1,
+    advance_time >= 200 |
+      booking_channel %in% c("Online TA", "Groups", "Offline TA/TO")
+  ) %>%
+  mutate(
+    booking_type = "Require Deposit",
+    revenue = (weekend_stays + week_stays) * average_daily_rate,
+    deposit_revenue = 0.50 * 0.90 * revenue
+  ) %>%
+  group_by(property, booking_type) %>%
+  summarise(
+    potential_deposit_revenue = sum(deposit_revenue, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    potential_deposit_revenue = scales::dollar(potential_deposit_revenue)
+  )
+
+
+#Cancellation rate for required group
+current_cancellation_rate <- df %>%
+  filter(
+    advance_time >= 200 |
+      booking_channel %in% c("Online TA", "Groups", "Offline TA/TO")
+  ) %>%
+  group_by(property) %>%
+  summarise(
+    total_bookings = n(),
+    canceled_bookings = sum(canceled == 1, na.rm = TRUE),
+    cancellation_rate = mean(canceled, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    cancellation_rate = scales::percent(cancellation_rate)
+  )
+```
